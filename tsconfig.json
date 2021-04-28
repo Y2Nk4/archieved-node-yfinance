@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "sourceMap": true,
+    "declaration": false,
+    "experimentalDecorators": true,
+    "module": "CommonJS",
+    "target": "ES2020",
+    "outDir": "lib",
+    "lib": ["ES2020"],
+    "types": [
+      "node"
+    ],
+    "baseUrl": ".",
+    "allowSyntheticDefaultImports": true
+  },
+  "exclude": [
+    "node_modules"
+  ],
+  "include": ["src"],
+}
