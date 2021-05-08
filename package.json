@@ -18,6 +18,8 @@
   },
   "homepage": "https://github.com/Y2Nk4/node-yfinance#readme",
   "dependencies": {
+    "cheerio": "^1.0.0-rc.9",
+    "danfojs-node": "^0.2.6",
     "got": "^11.8.2",
     "hpagent": "^0.1.1",
     "string-template": "^1.0.0"

@@ -2,6 +2,9 @@ import * as api from '../api/url'
 import { InvalidParameterError } from '../exceptions/InvalidParameterError'
 import { RequestError } from '../exceptions/RequestError'
 import { SessionManager } from './SessionManager'
+import TickerFundamentals from '../structs/TickerFundamentals'
+import cheerio from 'cheerio'
+import { DataFrame } from 'danfojs-node'
 
 const stringTemplate = require('string-template')
 
@@ -9,6 +12,7 @@ export class Ticker {
   public symbol: string;
   public proxy: any;
   private sessionManager: SessionManager;
+  private tickerFundamentals: TickerFundamentals;
 
   constructor(symbol: string, proxy: string | any = null) {
     this.symbol = symbol
@@ -131,15 +135,14 @@ export class Ticker {
     let url = stringTemplate(
       api.historyChart,
       {
-        baseUrl: api.baseUrl,
         symbol: this.symbol
       }
     )
 
     let client = this.sessionManager.session()
 
-    console.log(url)
-    console.log(params)
+    // console.log(url)
+    // console.log(params)
     let data = await client.get(url, {
       searchParams: params
     }).catch((error) => {
@@ -156,6 +159,150 @@ export class Ticker {
       throw new RequestError(errorMsg, error.response, errorCode)
     })
 
-    console.log(data.body)
+    return data.body
+  }
+
+  async _getFundamentals (prop: string) {
+    if (this.tickerFundamentals && this.tickerFundamentals[prop]) {
+      return this.tickerFundamentals[prop]
+    } else {
+      // fetch fundamentals and cache
+      let url = stringTemplate(
+        api.tickerFundamentals,
+        {
+          symbol: this.symbol
+        }
+      )
+
+      let client = this.sessionManager.session()
+
+      // console.log(params)
+      let data = await client.get(url)
+        .catch((error) => {
+          console.error(error.response.body)
+          let errorMsg = error.message
+          let errorCode = ''
+          if (error.response && error.response.body) {
+            try {
+              let data = JSON.parse(error.response.body)
+              errorMsg = data.chart.error.description
+              errorCode = data.chart.error.code
+            } catch (e) {}
+          }
+          throw new RequestError(errorMsg, error.response, errorCode)
+      })
+
+      let quoteSummary = Ticker.getQuotePageJson(data.body)
+      console.log(quoteSummary, 'data')
+
+      let holderUrl = stringTemplate(
+        api.tickerHolders,
+        {
+          symbol: this.symbol
+        }
+      )
+      let holdersData = await client.get(holderUrl)
+        .then(resp => {
+          return Promise.resolve(Ticker.parseHoldersTable(resp.body))
+        })
+        .catch(error => {
+          console.error(error.response.body)
+          return Promise.resolve({})
+        })
+
+      console.log('holders', holdersData)
+      this.tickerFundamentals = {
+        earnings: new DataFrame(quoteSummary.earnings.financialsChart.yearly.map((yearlyData) => {
+          return {
+            date: yearlyData.date,
+            earnings: yearlyData.earnings.raw,
+            revenue: yearlyData.revenue.raw
+          }
+        })),
+        quarterly_earnings: new DataFrame(quoteSummary.earnings.financialsChart.quarterly.map((yearlyData) => {
+          return {
+            date: yearlyData.date,
+            earnings: yearlyData.earnings.raw,
+            revenue: yearlyData.revenue.raw
+          }
+        }))
+      }
+
+      return this.tickerFundamentals[prop]
+    }
+  }
+
+  private static parseHoldersTable (pageContent: string) {
+    let $ = cheerio.load(pageContent)
+    console.log('loaded')
+    function parseTable (table) {
+      let result = []
+      let header = []
+      $(table).find('thead tr th').each((index, th) => {
+        header.push($(th).text())
+      })
+      $(table).find('tbody tr').each((index, row) => {
+        let rowData = {}
+        $(row).find('td').each((index, td) => {
+          if (index < header.length) {
+            rowData[header[index]] = $(td).text()
+          } else {
+            rowData[index] = $(td).text()
+          }
+        })
+        result.push(rowData)
+      })
+      return new DataFrame(result)
+    }
+
+    let tables = $('div#Main table')
+
+    let holders = {
+      major_holders: null,
+      institutional_holders: null,
+      mutualfund_holders: null
+    }
+    if (tables.length >= 3) {
+      holders.major_holders = parseTable(tables[0])
+      holders.institutional_holders = parseTable(tables[1])
+      holders.mutualfund_holders = parseTable(tables[2])
+    } else if (tables.length >= 2) {
+      holders.major_holders = parseTable(tables[0])
+      holders.institutional_holders = parseTable(tables[1])
+    } else if (tables.length >= 1) {
+      holders.major_holders = parseTable(tables[0])
+    }
+
+    // data is not cleaned yet
+    // cleaning process includes process `Shares`, `Date Reported` and `Value`
+    return holders
+  }
+
+  private static getQuotePageJson (pageContent: string){
+    console.log('page content length: ', pageContent.length)
+    if (pageContent.indexOf('QuoteSummaryStore') === -1) {
+      return {}
+    } else {
+      let jsonStr = pageContent
+        .split('root.App.main =')[1]
+        .split('(this)')[0]
+        .split(';\n}')[0]
+        .trim()
+      let data = JSON.parse(jsonStr)
+      console.log(data, 'quoteRawJSON')
+      return data.context.dispatcher.stores.QuoteSummaryStore
+    }
+  }
+
+  get actions() {
+    return this._getFundamentals('actions')
+  }
+
+  get earnings () {
+    return this._getFundamentals('earnings')
+  }
+
+  get quarterly_earnings () {
+    return this._getFundamentals('quarterly_earnings')
   }
 }
